@@ -1,0 +1,51 @@
+#!/bin/bash
+
+die() { echo $*; exit 1; }
+out() { $STDOUT && echo $*; }
+
+[[ -t 1 ]] && STDOUT=true || STDOUT=false
+
+for OPT in $@ ; do
+  case $OPT in
+    '--verbose' | '-v' ) STDOUT=true  ;;
+    '--quiet'   | '-q' ) STDOUT=false ;;
+    * ) DIR=$OPT ;;
+  esac
+  shift
+done
+
+PROJECT=${DIR:-$(basename $PWD)}
+DIR=~/Projects/${PROJECT}
+
+[[ -d "$DIR" ]] || die "$DIR is not a directory"
+
+sync_dir() {
+  NUM=$1
+  VERBOSE=$($STDOUT && echo 'verbose' || echo 'quiet')
+  DATADIR="/data/${PROJECT}"
+
+  [[ -e "$DIR/.NOSYNC" ]] && return
+
+  out "syncing $NUM change(s) on $(date)..."
+  rsync -are "ssh -l dcyoung"          \
+    --$VERBOSE                         \
+    --delete --delete-during           \
+    --exclude-from "${HOME}/.gitignore"\
+    --exclude-from "${DIR}/.gitignore" \
+    --exclude ".env"                   \
+    --exclude ".bundle/"               \
+    --exclude "config/*.yml"           \
+    --exclude "vendor/cache/"          \
+    --exclude "*.tgz"                  \
+      $DIR/ dyoung.vm:$DATADIR || die "Error occurred during sync"
+
+  out -e "complete"
+  afplay "/System/Library/Sounds/Morse.aiff"
+}
+
+
+sync_dir initial
+
+out -e "\nWatching for changes in $DIR"
+fswatch -o -l 5 --exclude ".idea" "$DIR" | while read NUM ; do sync_dir $NUM; done || die "an error occurred while syncing $DIR"
+
