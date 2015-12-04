@@ -1,37 +1,26 @@
 #!/bin/bash
 
-die() { echo $*; exit 1; }
 out() { $STDOUT && echo $*; }
-
-[[ -t 1 ]] && STDOUT=true || STDOUT=false
-
-for OPT in $@ ; do
-  case $OPT in
-    '--verbose' | '-v' ) STDOUT=true  ;;
-    '--quiet'   | '-q' ) STDOUT=false ;;
-    * ) DIR=$OPT ;;
-  esac
-  shift
-done
-
-PROJECT=${DIR:-$(basename $PWD)}
-DIR=~/Projects/${PROJECT}
-
-[[ -d "$DIR" ]] || die "$DIR is not a directory"
+die() { out $*; exit 1; }
 
 sync_dir() {
-  NUM=$1
+  DIR=$1
+  NUM=$2
   VERBOSE=$($STDOUT && echo 'verbose' || echo 'quiet')
-  DATADIR="/data/${PROJECT}"
+  BASENAME=$(basename $DIR)
+  DATADIR="/data/$BASENAME"
 
-  [[ -e "$DIR/.NOSYNC" ]] && return
+  [[ -n "$(ls $DIR/.NOSYNC* 2>/dev/null)" ]] && return
+  [[ -e "$DIR/.KILLSYNC" ]] && die "Aborting, KILLSYNC found."
 
-  out "syncing $NUM change(s) on $(date)..."
+  out "syncing $NUM change(s) for $BASENAME on $(date)..."
   rsync -are "ssh -l dcyoung"          \
     --$VERBOSE                         \
     --delete --delete-during           \
     --exclude-from "${HOME}/.gitignore"\
     --exclude-from "${DIR}/.gitignore" \
+    --exclude "lib"                    \
+    --exclude "dist"                   \
     --exclude ".env"                   \
     --exclude ".bundle/"               \
     --exclude "config/*.yml"           \
@@ -43,9 +32,40 @@ sync_dir() {
   afplay "/System/Library/Sounds/Morse.aiff"
 }
 
+BACKGROUND=false
+[[ -t 1 ]] && STDOUT=true || STDOUT=false
 
-sync_dir initial
+for OPT in $@ ; do
+  case $OPT in
+    '--verbose'    | '-v' ) STDOUT=true  ;;
+    '--quiet'      | '-q' ) STDOUT=false ;;
+    '--background' | '-b' ) STDOUT=false; BACKGROUND=true ;;
+    * ) DIRS+=" $OPT" ;;
+  esac
+  shift
+done
 
-out -e "\nWatching for changes in $DIR"
-fswatch -o -l 5 --exclude ".idea" "$DIR" | while read NUM ; do sync_dir $NUM; done || die "an error occurred while syncing $DIR"
+# Use the current directory if one wasn't provided.
+[[ -z "$DIRS" ]] && DIRS=$PWD
+
+for DIR in $DIRS ; do
+  PROJECT=$(basename $DIR)
+
+  if [[ ! -d "$DIR" ]] ; then
+    # Try looking in our Projects directory
+    DIR="$(eval echo "~/Projects/$DIR")"
+
+    out "Hmm... trying $DIR"
+
+    # Die if we still can't find it.
+    [[ -d "$DIR" ]] || die "Nope, cannot find a working directory for $PROJECT"
+  fi
+
+  sync_dir $DIR initial
+
+  out -e "\nWatching for changes in $DIR"
+  ( fswatch -o -l5 --exclude ".idea" "$DIR" | while read NUM ; do sync_dir $DIR $NUM; done || die "an error occurred while syncing $DIR" )&
+done
+
+[[ $BACKGROUND ]] && wait
 
